@@ -731,9 +731,13 @@
       return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
     }
 
-    // ========= TRANSCRIPT UI (BOT always merged into one bubble until user speaks) =========
+    // ========= TRANSCRIPT UI (BOT merged into one bubble + auto-scroll pin) =========
     let transcriptLines = 0;
 
+    // auto-scroll "pin to bottom" state
+    let transcriptPinnedToBottom = true;
+
+    // BOT aggregation state (one bubble until user speaks)
     let lastBotBubbleEl = null;
     let lastBotMetaEl = null;
     let lastBotText = "";
@@ -745,11 +749,27 @@
       el.textContent = `${n} ${n === 1 ? "שורה" : "שורות"}`;
     }
 
-    function _scrollIfNearBottom(list){
-      const thresholdPx = 24;
-      const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight;
-      const wasNearBottom = distanceFromBottom < thresholdPx;
-      if (wasNearBottom) requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+    function _scrollToBottom(list){
+      list.scrollTop = list.scrollHeight;
+    }
+
+    function _scrollToBottomIfPinned(list){
+      if (!transcriptPinnedToBottom) return;
+      requestAnimationFrame(() => _scrollToBottom(list));
+    }
+
+    function _setupTranscriptScrollPin(){
+      const list = byId("transcriptList");
+      if (!list) return;
+
+      const thresholdPx = 40;
+      list.addEventListener("scroll", () => {
+        const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight;
+        transcriptPinnedToBottom = distanceFromBottom < thresholdPx;
+      }, { passive: true });
+
+      // start pinned
+      transcriptPinnedToBottom = true;
     }
 
     function _createLineEl(kind, text, metaLabel){
@@ -788,10 +808,11 @@
         list.appendChild(line);
         transcriptLines += 1;
         updateTranscriptCount();
-        _scrollIfNearBottom(list);
+        _scrollToBottomIfPinned(list);
         return;
       }
 
+      // BOT: always append into ONE bubble (until user speaks)
       const botLabel = "רויטל";
 
       if (!lastBotBubbleEl) {
@@ -804,14 +825,16 @@
 
         transcriptLines += 1;
         updateTranscriptCount();
-        _scrollIfNearBottom(list);
+        _scrollToBottomIfPinned(list);
         return;
       }
 
+      // Append to existing bot bubble
       const needsSpace = lastBotText.length > 0 && !/[ \n\r\t]$/.test(lastBotText);
       const joiner = needsSpace ? " " : "";
       lastBotText = `${lastBotText}${joiner}${safeText}`;
 
+      // Update bubble text while preserving meta element
       if (!lastBotBubbleEl.firstChild || lastBotBubbleEl.firstChild.nodeType !== Node.TEXT_NODE) {
         lastBotBubbleEl.insertBefore(document.createTextNode(""), lastBotMetaEl);
       }
@@ -819,7 +842,7 @@
 
       if (lastBotMetaEl) lastBotMetaEl.textContent = botLabel;
 
-      _scrollIfNearBottom(list);
+      _scrollToBottomIfPinned(list);
     }
 
     function clearTranscript(){
@@ -828,6 +851,7 @@
       transcriptLines = 0;
       updateTranscriptCount();
       _flushBotBubble();
+      transcriptPinnedToBottom = true;
     }
 
     // ========= WEBSOCKET TAP (captures SIP INFO frames with JSON _transcription) =========
@@ -1022,6 +1046,8 @@
 
     // ========= UI wiring =========
     document.addEventListener("DOMContentLoaded", () => {
+      _setupTranscriptScrollPin();
+
       // Projection modal
       byId("btnProjection").addEventListener("click", () => show(byId("projectionModal")));
       byId("btnCloseProjection").addEventListener("click", () => hide(byId("projectionModal")));
