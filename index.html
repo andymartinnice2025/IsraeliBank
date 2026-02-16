@@ -731,20 +731,16 @@
       return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
     }
 
-    // ========= TRANSCRIPT UI (BOT merged into one bubble) =========
+    // ========= TRANSCRIPT UI (BOT always merged into one bubble until user speaks) =========
     let transcriptLines = 0;
 
-    // BOT aggregation state
     let lastBotBubbleEl = null;
     let lastBotMetaEl = null;
     let lastBotText = "";
-    let lastBotFlushTimer = null;
-    const BOT_MERGE_WINDOW_MS = 1200;
 
     function updateTranscriptCount(){
       const el = byId("transcriptCount");
       if (!el) return;
-
       const n = transcriptLines;
       el.textContent = `${n} ${n === 1 ? "שורה" : "שורות"}`;
     }
@@ -773,10 +769,6 @@
       lastBotBubbleEl = null;
       lastBotMetaEl = null;
       lastBotText = "";
-      if (lastBotFlushTimer) {
-        clearTimeout(lastBotFlushTimer);
-        lastBotFlushTimer = null;
-      }
     }
 
     function addTranscriptLine(originator, text){
@@ -787,7 +779,9 @@
       const safeText = String(text || "").trim();
       if (!safeText) return;
 
-      if (who === "user") {
+      const isUser = who === "user";
+
+      if (isUser) {
         _flushBotBubble();
 
         const { line } = _createLineEl("user", safeText, "יוגב קריף");
@@ -798,7 +792,6 @@
         return;
       }
 
-      // BOT: merge chunks into a single bubble
       const botLabel = "רויטל";
 
       if (!lastBotBubbleEl) {
@@ -812,26 +805,21 @@
         transcriptLines += 1;
         updateTranscriptCount();
         _scrollIfNearBottom(list);
-      } else {
-        const needsSpace = lastBotText.length > 0 && !/[ \n\r\t]$/.test(lastBotText);
-        const joiner = needsSpace ? " " : "";
-        lastBotText = `${lastBotText}${joiner}${safeText}`;
-
-        // Update bubble text but keep the meta element
-        if (!lastBotBubbleEl.firstChild || lastBotBubbleEl.firstChild.nodeType !== Node.TEXT_NODE) {
-          lastBotBubbleEl.insertBefore(document.createTextNode(""), lastBotMetaEl);
-        }
-        lastBotBubbleEl.firstChild.nodeValue = lastBotText;
-
-        if (lastBotMetaEl) lastBotMetaEl.textContent = botLabel;
-
-        _scrollIfNearBottom(list);
+        return;
       }
 
-      if (lastBotFlushTimer) clearTimeout(lastBotFlushTimer);
-      lastBotFlushTimer = setTimeout(() => {
-        _flushBotBubble();
-      }, BOT_MERGE_WINDOW_MS);
+      const needsSpace = lastBotText.length > 0 && !/[ \n\r\t]$/.test(lastBotText);
+      const joiner = needsSpace ? " " : "";
+      lastBotText = `${lastBotText}${joiner}${safeText}`;
+
+      if (!lastBotBubbleEl.firstChild || lastBotBubbleEl.firstChild.nodeType !== Node.TEXT_NODE) {
+        lastBotBubbleEl.insertBefore(document.createTextNode(""), lastBotMetaEl);
+      }
+      lastBotBubbleEl.firstChild.nodeValue = lastBotText;
+
+      if (lastBotMetaEl) lastBotMetaEl.textContent = botLabel;
+
+      _scrollIfNearBottom(list);
     }
 
     function clearTranscript(){
