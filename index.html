@@ -717,7 +717,7 @@
     // ========= CONFIG =========
     const WIDGET_SRC = "https://static-trial.cognigy.ai/webrtc/webRTCWidget.js";
     const COGNIGY_WEBRTC_ENDPOINT_URL =
-      "https://endpoint-trial.cognigy.ai/bbb23f7f1e4fe4d60d5779d1c93b9b077691ac6bd5e6aa895613577850f1405c";
+      "https://endpoint-trial.cognigy.ai/a00e6f298c6e5dd6414ba0b351f883a05b70f273cafe3ec41706ddb89dccf8a0";
 
     // ========= HELPERS =========
     const byId = (id) => document.getElementById(id);
@@ -731,8 +731,15 @@
       return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
     }
 
-    // ========= TRANSCRIPT UI =========
+    // ========= TRANSCRIPT UI (BOT merged into one bubble) =========
     let transcriptLines = 0;
+
+    // BOT aggregation state
+    let lastBotBubbleEl = null;
+    let lastBotMetaEl = null;
+    let lastBotText = "";
+    let lastBotFlushTimer = null;
+    const BOT_MERGE_WINDOW_MS = 1200;
 
     function updateTranscriptCount(){
       const el = byId("transcriptCount");
@@ -740,6 +747,36 @@
 
       const n = transcriptLines;
       el.textContent = `${n} ${n === 1 ? "שורה" : "שורות"}`;
+    }
+
+    function _scrollIfNearBottom(list){
+      const thresholdPx = 24;
+      const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight;
+      const wasNearBottom = distanceFromBottom < thresholdPx;
+      if (wasNearBottom) requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+    }
+
+    function _createLineEl(kind, text, metaLabel){
+      const line = document.createElement("div");
+      line.className = `tLine ${kind}`;
+      line.textContent = text;
+
+      const meta = document.createElement("span");
+      meta.className = "tMeta";
+      meta.textContent = metaLabel;
+      line.appendChild(meta);
+
+      return { line, meta };
+    }
+
+    function _flushBotBubble(){
+      lastBotBubbleEl = null;
+      lastBotMetaEl = null;
+      lastBotText = "";
+      if (lastBotFlushTimer) {
+        clearTimeout(lastBotFlushTimer);
+        lastBotFlushTimer = null;
+      }
     }
 
     function addTranscriptLine(originator, text){
@@ -750,26 +787,51 @@
       const safeText = String(text || "").trim();
       if (!safeText) return;
 
-      const thresholdPx = 24;
-      const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight;
-      const wasNearBottom = distanceFromBottom < thresholdPx;
+      if (who === "user") {
+        _flushBotBubble();
 
-      const line = document.createElement("div");
-      line.className = `tLine ${who === "user" ? "user" : "bot"}`;
-      line.textContent = safeText;
-
-      const meta = document.createElement("span");
-      meta.className = "tMeta";
-      meta.textContent = who === "user" ? "יוגב קריף" : "רויטל";
-      line.appendChild(meta);
-
-      list.appendChild(line);
-      transcriptLines += 1;
-      updateTranscriptCount();
-
-      if (wasNearBottom) {
-        requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+        const { line } = _createLineEl("user", safeText, "יוגב קריף");
+        list.appendChild(line);
+        transcriptLines += 1;
+        updateTranscriptCount();
+        _scrollIfNearBottom(list);
+        return;
       }
+
+      // BOT: merge chunks into a single bubble
+      const botLabel = "רויטל";
+
+      if (!lastBotBubbleEl) {
+        const { line, meta } = _createLineEl("bot", safeText, botLabel);
+        list.appendChild(line);
+
+        lastBotBubbleEl = line;
+        lastBotMetaEl = meta;
+        lastBotText = safeText;
+
+        transcriptLines += 1;
+        updateTranscriptCount();
+        _scrollIfNearBottom(list);
+      } else {
+        const needsSpace = lastBotText.length > 0 && !/[ \n\r\t]$/.test(lastBotText);
+        const joiner = needsSpace ? " " : "";
+        lastBotText = `${lastBotText}${joiner}${safeText}`;
+
+        // Update bubble text but keep the meta element
+        if (!lastBotBubbleEl.firstChild || lastBotBubbleEl.firstChild.nodeType !== Node.TEXT_NODE) {
+          lastBotBubbleEl.insertBefore(document.createTextNode(""), lastBotMetaEl);
+        }
+        lastBotBubbleEl.firstChild.nodeValue = lastBotText;
+
+        if (lastBotMetaEl) lastBotMetaEl.textContent = botLabel;
+
+        _scrollIfNearBottom(list);
+      }
+
+      if (lastBotFlushTimer) clearTimeout(lastBotFlushTimer);
+      lastBotFlushTimer = setTimeout(() => {
+        _flushBotBubble();
+      }, BOT_MERGE_WINDOW_MS);
     }
 
     function clearTranscript(){
@@ -777,6 +839,7 @@
       if (list) list.innerHTML = "";
       transcriptLines = 0;
       updateTranscriptCount();
+      _flushBotBubble();
     }
 
     // ========= WEBSOCKET TAP (captures SIP INFO frames with JSON _transcription) =========
