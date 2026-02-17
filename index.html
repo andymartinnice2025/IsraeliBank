@@ -768,7 +768,6 @@
         transcriptPinnedToBottom = distanceFromBottom < thresholdPx;
       }, { passive: true });
 
-      // start pinned
       transcriptPinnedToBottom = true;
     }
 
@@ -791,15 +790,136 @@
       lastBotText = "";
     }
 
+    // ========= USER MONEY NORMALIZER (display-only, user side only) =========
+    const HE_UNITS = {
+      "אפס":0,"אחת":1,"אחד":1,"שתיים":2,"שניים":2,"שתי":2,"שני":2,
+      "שלוש":3,"שלושה":3,"ארבע":4,"ארבעה":4,"חמש":5,"חמישה":5,
+      "שש":6,"שישה":6,"שבע":7,"שבעה":7,"שמונה":8,"תשע":9,"תשעה":9
+    };
+    const HE_TEENS = {
+      "עשר":10,"אחת עשרה":11,"אחד עשר":11,"שתים עשרה":12,"שנים עשר":12,
+      "שלוש עשרה":13,"ארבע עשרה":14,"חמש עשרה":15,"שש עשרה":16,
+      "שבע עשרה":17,"שמונה עשרה":18,"תשע עשרה":19
+    };
+    const HE_TENS = {
+      "עשרים":20,"שלושים":30,"ארבעים":40,"חמישים":50,
+      "שישים":60,"שבעים":70,"שמונים":80,"תשעים":90
+    };
+
+    function _normHeText(s){
+      return String(s || "")
+        .replace(/[״"]/g, "")
+        .replace(/[׳']/g, "")
+        .replace(/-/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function _hasCurrencyCue(s){
+      const t = String(s || "").toLowerCase();
+      return (
+        t.includes("₪") ||
+        t.includes("שקל") || t.includes("שקלים") || t.includes("שח") ||
+        t.includes("nis") || t.includes("shekel") || t.includes("shekels")
+      );
+    }
+
+    function _parseHebrewNumberTokens(tokens, startIdx){
+      let i = startIdx;
+      let value = 0;
+      let used = 0;
+
+      // Thousands
+      if (tokens[i] === "אלף") {
+        value += 1000; i += 1; used += 1;
+      } else if (tokens[i] in HE_UNITS && tokens[i+1] === "אלף") {
+        value += HE_UNITS[tokens[i]] * 1000; i += 2; used += 2;
+      }
+
+      // Hundreds
+      if (tokens[i] === "מאה") {
+        value += 100; i += 1; used += 1;
+      } else if (tokens[i] in HE_UNITS && tokens[i+1] === "מאות") {
+        value += HE_UNITS[tokens[i]] * 100; i += 2; used += 2;
+      }
+
+      // Teens (two-word)
+      const teen2 = (tokens[i] && tokens[i+1]) ? `${tokens[i]} ${tokens[i+1]}` : null;
+      if (teen2 && HE_TEENS[teen2] != null) {
+        value += HE_TEENS[teen2]; i += 2; used += 2;
+      } else if (tokens[i] && HE_TEENS[tokens[i]] != null) {
+        value += HE_TEENS[tokens[i]]; i += 1; used += 1;
+      } else if (tokens[i] && HE_TENS[tokens[i]] != null) {
+        value += HE_TENS[tokens[i]]; i += 1; used += 1;
+
+        // optional standalone "ו"
+        if (tokens[i] === "ו") { i += 1; used += 1; }
+
+        if (tokens[i] && HE_UNITS[tokens[i]] != null) {
+          value += HE_UNITS[tokens[i]]; i += 1; used += 1;
+        }
+      } else {
+        // Units only
+        if (tokens[i] && HE_UNITS[tokens[i]] != null) {
+          value += HE_UNITS[tokens[i]]; i += 1; used += 1;
+        }
+      }
+
+      if (used === 0) return null;
+      return { value, usedTokens: used };
+    }
+
+    function _formatILS(n){
+      return `₪${Number(n).toLocaleString("en-US")}`;
+    }
+
+    function normalizeUserMoneyText(original){
+      const text = String(original || "");
+      if (!_hasCurrencyCue(text)) return text;
+
+      // If there are digits already, don't touch (likely correct)
+      if (/\d/.test(text)) return text;
+
+      const norm = _normHeText(text)
+        .replace(/[,.]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const tokens = norm.split(" ");
+
+      let best = null;
+      for (let idx = 0; idx < tokens.length; idx++){
+        const res = _parseHebrewNumberTokens(tokens, idx);
+        if (!res) continue;
+        if (!best || res.usedTokens > best.usedTokens) {
+          best = { ...res, startIdx: idx };
+        }
+      }
+
+      if (!best) return text;
+
+      const before = tokens.slice(0, best.startIdx).join(" ");
+      const after  = tokens.slice(best.startIdx + best.usedTokens).join(" ");
+      const replacement = _formatILS(best.value);
+
+      const rebuilt = [before, replacement, after].filter(Boolean).join(" ").trim();
+      return rebuilt || text;
+    }
+
     function addTranscriptLine(originator, text){
       const list = byId("transcriptList");
       if (!list) return;
 
       const who = (originator || "unknown").toLowerCase();
-      const safeText = String(text || "").trim();
+      let safeText = String(text || "").trim();
       if (!safeText) return;
 
       const isUser = who === "user";
+
+      // Only on caller side: normalize monetary phrases for display
+      if (isUser) {
+        safeText = normalizeUserMoneyText(safeText);
+      }
 
       if (isUser) {
         _flushBotBubble();
